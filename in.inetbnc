@@ -25,10 +25,10 @@ local log = log_open()
 local split = require "mini.string.split"
 local plainsplit1 = require "plainsplit1"
 
+-- short name --
+
 local tconcat=table.concat
 local tinsert=table.insert
-
--- TODO: pour un read de stdin non bloquant voir syscall.lfs open
 
 --[[
 rfc1459: rfc2812
@@ -55,9 +55,11 @@ local STATES={
 }
 for i,k in ipairs(STATES) do STATES[k]=i end
 
+package.loaded.STATES=STATES -- fake module, allow `require "STATES"` for other modules
+
 local orig_print = print
 local print = print
-local function send(prefix, cmd, target, params)
+local function send(self, prefix, cmd, target, params)
 	local line={}
 	if prefix then
 		tinsert(line, ":")
@@ -75,19 +77,26 @@ local function send(prefix, cmd, target, params)
 	print(tconcat(line))
 end
 
-local function  NOTICE(target, msg) send(nil,  "NOTICE", target, msg) end
-local function PRIVMSG(target, msg) send(nil, "PRIVMSG", target, msg) end
+local client={
+	send=send,
+	state=assert(STATES.new),
+	protocolnum=1,
+	host="hidden.irc-client.example.net",
+}
 
-local client={state=assert(STATES.new),protocolnum=1,host="hidden.irc-client.example.net"}
-function client.console(self, msg)
-	NOTICE(self.nick, msg)
+function client:sendNOTICE (target, msg) self:send(nil,  "NOTICE", target, msg) end
+function client:sendPRIVMSG(target, msg) self:send(nil, "PRIVMSG", target, msg) end
+
+function client:console(msg)
+	self:sendNOTICE(self.nick, msg)
 end
+
 local format=string.format
-function client.nuh()
-	return format("%s!~%s@%s", client.nick, client.user, client.host)
+function client:nuh()
+	return format("%s!~%s@%s", self.nick, self.user, self.host)
 end
-function client.realnuh()
-	return format("%s!%s@%s", client.nick, client.user, CLIENTIP)
+function client:realnuh()
+	return format("%s!%s@%s", self.nick, self.user, CLIENTIP)
 end
 
 local const_EXIT={}
@@ -105,20 +114,21 @@ Server: 001 dan :Welcome to the Internet Relay Network dan
 ]]--
 
 local function server_welcome(cli)
-	cli:console(format("You are connected as %s", cli.realnuh()))
-	cli:console(format("Visible on the network as %s", cli.nuh()))
+	cli:console(format("You are connected as %s", cli:realnuh()))
+	cli:console(format("Visible on the network as %s", cli:nuh()))
 	cli:console(format("Password used: %s", (cli.pass) and "yes" or "no"))
 	cli:console(format("CAP LS used: %s", (cli.capls) and "yes" or "no"))
 	cli:console("")
 end
 
 local function register(cli)
-	send(nil, "001", cli.nick, "Welcome to the Internet Relay Network")
+	cli:send(nil, "001", cli.nick, "Welcome to the Internet Relay Network")
 	cli.protocolnum=2
 	server_welcome(cli)
 end
 
-
+local protocol_cap = require "protocol_cap"
+--[[
 local protocol_cap = {}
 function protocol_cap.LS(cli, z)
 	if cli.state==STATES.new then
@@ -131,6 +141,7 @@ end
 protocol_cap.LIST = protocol_cap.LS
 protocol_cap.REQ  = function() end
 protocol_cap.END  = function() end
+]]--
 
 local protocol1 = {}
 function protocol1.CAP(cli,data)
@@ -177,7 +188,7 @@ function protocol1.USER(cli,data)
 end
 
 function protocol1.PING(cli,data)
-	send(nil, "PONG", tostring(data))
+	cli:send(nil, "PONG", tostring(data))
 end
 function protocol1.PONG(cli,data) end
 function protocol1.QUIT(cli,data)
@@ -222,7 +233,7 @@ function protocol2.JOIN(cli,data,parsed)
 	end
 
 	for _i,chan in ipairs(channels) do
-		send(cli.nuh(), "JOIN", chan)
+		cli:send(cli:nuh(), "JOIN", chan)
 	end
 end
 function protocol2.PART(cli,data)
@@ -230,7 +241,7 @@ function protocol2.PART(cli,data)
 	local channels,reason = plainsplit1(data, " ")
 	local channels = split(channels, ",", true, nil)
 	for _i,chan in ipairs(channels) do
-		send(cli.nuh(), "PART", chan)
+		cli:send(cli:nuh(), "PART", chan)
 	end
 end
 function protocol2.WHO(cli,data)
