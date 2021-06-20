@@ -107,8 +107,8 @@ Server: 001 dan :Welcome to the Internet Relay Network dan
 local function server_welcome(cli)
 	cli:console(format("You are connected as %s", cli.realnuh()))
 	cli:console(format("Visible on the network as %s", cli.nuh()))
-	cli:console(format("Password used: %s", (cli.pass == nil) and "no" or "yes"))
-	cli:console(format("CAP LS used: %s", (cli.pass == nil) and "no " or "yes"))
+	cli:console(format("Password used: %s", (cli.pass) and "yes" or "no"))
+	cli:console(format("CAP LS used: %s", (cli.capls) and "yes" or "no"))
 	cli:console("")
 end
 
