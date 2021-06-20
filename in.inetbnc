@@ -1,0 +1,281 @@
+#!/usr/bin/env luajit
+
+local os = require"os"
+local PWD=os.getenv"PWD"
+local CLIENTIP=tostring(os.getenv"REMOTE_HOST" or "unknown") -- no REMOTE_HOST happens outside of inetd (called buy command line during dev)
+
+package.path=PWD.."/?.lua;"..PWD.."/?/init.lua;"..package.path
+
+local function log_open()
+	local logcount = 0
+	local clientlog = io.open(PWD.."/log/irc."..CLIENTIP..".c.log","w")
+	local serverlog = io.open(PWD.."/log/irc."..CLIENTIP..".s.log","w")
+	clientlog:setvbuf("line")
+	serverlog:setvbuf("line")
+
+	local log = {}
+	function log.client(line) logcount=logcount+1 clientlog:write(logcount..":Client: "..line.."\n") end
+	function log.server(line) logcount=logcount+1 serverlog:write(logcount..":Server: "..line.."\n") end
+	function log.close() clientlog:flush() serverlog:flush() clientlog:close() serverlog:close() end
+	return log
+end
+
+local log = log_open()
+
+local split = require "mini.string.split"
+local plainsplit1 = require "plainsplit1"
+
+local tconcat=table.concat
+local tinsert=table.insert
+
+-- TODO: pour un read de stdin non bloquant voir syscall.lfs open
+
+--[[
+rfc1459: rfc2812
+
+PASS <password>
+NICK <nickname> [ <hopcount> ]
+USER <username> <hostname*ign> <servername*ign> <[:]realname>
+
+*: Note that hostname and servername are normally ignored by the IRC server
+
+
+USER guest tolmoon tolsun :Ronnie Reagan
+]]--
+
+local STATES={
+	"new", 
+	"CAP_LS",
+	"PASS",
+	"NICK",
+	"USER",
+	"CAP_REQ",
+	"CAP_END",
+	"registered"
+}
+for i,k in ipairs(STATES) do STATES[k]=i end
+
+local orig_print = print
+local print = print
+local function send(prefix, cmd, target, params)
+	local line={}
+	if prefix then
+		tinsert(line, ":")
+		tinsert(line, prefix)
+		tinsert(line, " ")
+	end
+	tinsert(line,cmd)
+	tinsert(line," ")
+	tinsert(line, target)
+	if params then
+		tinsert(line," :")
+		tinsert(line,params)
+	end
+	log.server(tconcat(line))
+	print(tconcat(line))
+end
+
+local function  NOTICE(target, msg) send(nil,  "NOTICE", target, msg) end
+local function PRIVMSG(target, msg) send(nil, "PRIVMSG", target, msg) end
+
+local client={state=assert(STATES.new),protocolnum=1,host="hidden.irc-client.example.net"}
+function client.console(self, msg)
+	NOTICE(self.nick, msg)
+end
+local format=string.format
+function client.nuh()
+	return format("%s!~%s@%s", client.nick, client.user, client.host)
+end
+function client.realnuh()
+	return format("%s!%s@%s", client.nick, client.user, CLIENTIP)
+end
+
+local const_EXIT={}
+
+--[[
+Client: CAP LS 302
+Client: NICK dan
+Client: USER d * 0 :This is a really good name
+Server: CAP * LS :multi-prefix sasl
+Client: CAP REQ :multi-prefix
+Server: CAP * ACK multi-prefix
+Client: CAP END
+Server: 001 dan :Welcome to the Internet Relay Network dan
+...
+]]--
+
+local function server_welcome(cli)
+	cli:console(format("You are connected as %s", cli.realnuh()))
+	cli:console(format("Visible on the network as %s", cli.nuh()))
+	cli:console(format("Password used: %s", (cli.pass == nil) and "no" or "yes"))
+	cli:console(format("CAP LS used: %s", (cli.pass == nil) and "no " or "yes"))
+	cli:console("")
+end
+
+local function register(cli)
+	send(nil, "001", cli.nick, "Welcome to the Internet Relay Network")
+	cli.protocolnum=2
+	server_welcome(cli)
+end
+
+
+local protocol_cap = {}
+function protocol_cap.LS(cli, z)
+	if cli.state==STATES.new then
+		cli.capls=z -- "" or "302" or "307" ...
+		cli.state=STATES.CAP_LS
+	else
+		-- for now: allow CAP LS only at the beginning
+	end
+end
+protocol_cap.LIST = protocol_cap.LS
+protocol_cap.REQ  = function() end
+protocol_cap.END  = function() end
+
+local protocol1 = {}
+function protocol1.CAP(cli,data)
+	local cmd2,z = plainsplit1(data, " ")
+	local f = protocol_cap[cmd2]
+	if not f then
+		-- protocol error or unsupported
+		-- just drop it
+	else
+		f(cli, z or "")
+	end
+end
+function protocol1.PASS(cli,data)
+	assert(cli.state <= STATES.CAP_LS, "PASS protocol error")
+	cli.pass = data
+	cli.state=STATES.PASS
+end
+function protocol1.NICK(cli,data)
+	assert(cli.state < STATES.NICK, "NICK protocol error")
+	local nick,z = plainsplit1(data, " ")
+	cli.nick = nick
+	cli.state=STATES.NICK
+end
+function protocol1.USER(cli,data)
+	assert(cli.state == STATES.NICK or cli.state == STATES.USER, "USER protocol error")
+	local p = split(data, " ", true, 3)
+	assert(#p<=4)
+	local realname = p[4] or ""
+	if realname and realname:sub(1,1)==":" then
+		realname = realname:sub(2)
+	end
+	local arg2 = p[2]
+	if arg2 == "8" then
+		-- USER guest 0 * :Ronnie Reagan   ; User registering themselves with a username of "guest" and real name "Ronnie Reagan".
+		-- USER guest 8 * :Ronnie Reagan   ; User registering themselves with a username of "guest" and real name "Ronnie Reagan", and asking to be set invisible.
+		cli.user_want_invisible = true
+	end
+	cli.user = p[1]
+	cli.realname = realname
+	cli.state=STATES.USER
+--	if cli.capls==false then -- non CAP client
+	return register(cli)
+--	end
+end
+
+function protocol1.PING(cli,data)
+	send(nil, "PONG", tostring(data))
+end
+function protocol1.PONG(cli,data) end
+function protocol1.QUIT(cli,data)
+	if not data then
+		data=""
+	else
+		if data:sub(1,1)==":" then
+			data=data:sub(2)
+		else
+			local params
+			params,data = plainsplit1(data, " :")
+		end
+	end
+	log.server("# he quit with reason:"..data)
+	return const_EXIT
+end
+
+local protocol2 = {}
+function protocol2.PRIVMSG(cli,data)
+end
+function protocol2.NOTICE(cli,data)
+end
+protocol2.PING = protocol1.PING
+protocol2.PONG = protocol1.PONG
+protocol2.QUIT = protocol1.QUIT
+function protocol2.MODE(cli,data,parsed)
+end
+function protocol2.JOIN(cli,data,parsed)
+-- JOIN #foo,#bar fubar,foobar                 (format envoyé par le client au server ?)
+-- JOIN #foo,&bar fubar                        #foo key fubar ; &bar no key
+-- :WiZ!jto@tolsun.oulu.fi JOIN #Twilight_zon  (format emit par le server vers le client ?)
+
+	if data:sub(1,1)==":" then
+		log.server("# unsupported JOIN format! data="..data)
+		return
+	end
+
+	local channels,keys = plainsplit1(data, " ")
+	local channels = split(channels, ",", true, nil)
+	if keys then
+		keys=split(keys, ",", true, nil)
+	end
+
+	for _i,chan in ipairs(channels) do
+		send(cli.nuh(), "JOIN", chan)
+	end
+end
+function protocol2.PART(cli,data)
+	--? supposed syntax ?: PART #foo,#bar [:]?reason
+	local channels,reason = plainsplit1(data, " ")
+	local channels = split(channels, ",", true, nil)
+	for _i,chan in ipairs(channels) do
+		send(cli.nuh(), "PART", chan)
+	end
+end
+function protocol2.WHO(cli,data)
+end
+
+local protocol = {}
+protocol[1] = protocol1 -- before registration (PASS/NICK/USER)
+protocol[2] = protocol2 -- after registration
+
+local function processline(cli, data)
+	local prefix = ''
+	if data:sub(1,1)==":" then
+		prefix,data = painsplit1(data:sub(2), " ")
+	end
+	local cmd; cmd,data = plainsplit1(data, " ")
+	local parsed = {prefix=prefix, cmd=cmd}
+
+	local proto = protocol[cli.protocolnum]
+	local f = proto[cmd]
+	if f then
+		return f(cli, data, parsed)
+	else
+		log.server("# unknow command '"..cmd.."' for prefix='"..prefix.."' data='"..(data or "").."'")
+	end
+end
+local function main(client)
+	local fdin = io.stdin
+	while true do
+		io.stdout:flush()
+		local line = fdin:read("*l")
+		if not line then break end
+		if line:sub(-1,-1)=="\r" then
+			line=line:sub(1,-2)
+		end
+		if line:match("^%z*$") then
+			-- continue
+		elseif line=="\0" then
+			-- continue
+		else
+			
+			log.client(line)
+			local r = processline(client,line)
+			if r == const_EXIT then break end
+		end
+	end
+end
+main(client)
+log.close()
