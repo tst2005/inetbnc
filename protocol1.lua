@@ -6,17 +6,18 @@ local plainsplit1 = require "plainsplit1"
 
 local STATES={
 	"new",
-	"CAP_LS",
+	"CAP_PRE_USER", -- mainly: CAP LS
 	"PASS",
 	"NICK",
 	"USER",
-	"CAP_REQ",
-	"CAP_END",
+	"CAP_POST_USER", -- full CAP negociation (LS/REQ/ACK/NAK/NEW/DEL/END)
 	"registered",
 }
 for i,k in ipairs(STATES) do STATES[k]=i end
 
 local protocol_cap = require "protocol_cap"
+assert(protocol_cap.pre_user)
+assert(protocol_cap.post_user)
 
 -- short name --
 
@@ -38,41 +39,48 @@ USER guest tolmoon tolsun :Ronnie Reagan
 
 local protocol1 = {}
 function protocol1.init(cli)
-	cli.state=STATES.new
+	cli.state=assert(STATES.new)
 	cli.states=STATES
 	cli.protocol=protocol1
 	cli.protocolnum=1
+	--cli.protocolnext=2
 	return cli
 end
 
-local function register(cli)
-	cli:send(nil, "001", cli.nick, "Welcome to the Internet Relay Network")
-	cli.protocol.finished(cli)
-end
-
 function protocol1.finished(cli)
-	return cli.protocols[2].init(cli)
+	cli:send(nil, "001", cli.nick, "Welcome to the Internet Relay Network")
+	cli.protocolnext=2
 end
 function protocol1.unkown(cli)
 	log.server("# unknow command '"..cmd.."' for prefix='"..prefix.."' data='"..(data or "").."'")
 end
 
-function protocol1.CAP(cli,data)
-	local cmd2,z = plainsplit1(data, " ")
-	local f = protocol_cap[cmd2]
-	if not f then
-		-- protocol error or unsupported
-		-- just drop it
-	else
-		f(cli, z or "")
+function protocol1.CAP(cli,data, parsed)
+	assert(cli.state <= STATES.CAP_PRE_USER or cli.state == STATES.CAP_POST_USER)
+	local cmd2
+	cmd2,data = plainsplit1(data, " ")
+	parsed.cmd2 = cmd
+
+	local f
+	if cli.state <= STATES.CAP_PRE_USER then
+		assert(protocol_cap.pre_user.unknown)
+		f = protocol_cap.pre_user[cmd2] or protocol_cap.pre_user.unknown
+	elseif cli.state == STATES.CAP_POST_USER then
+		assert(protocol_cap.post_user.unknown)
+		f = protocol_cap.post_user[cmd2] or protocol_cap.post_user.unknown
+	end
+	if f then
+		f(cli, data or "", parsed)
 	end
 end
-function protocol1.PASS(cli,data)
-	assert(cli.state <= STATES.CAP_LS, "PASS protocol error")
+function protocol1.PASS(cli,data, parsed)
+	assert(cli.state <= STATES.CAP_PRE_USER, "PASS protocol error")
 	cli.pass = data
 	cli.state=STATES.PASS
 end
 function protocol1.NICK(cli,data)
+	print(cli.state)
+	print(STATES.NICK)
 	assert(cli.state < STATES.NICK, "NICK protocol error")
 	local nick,z = plainsplit1(data, " ")
 	cli.nick = nick
@@ -91,13 +99,16 @@ function protocol1.USER(cli,data)
 		-- USER guest 0 * :Ronnie Reagan   ; User registering themselves with a username of "guest" and real name "Ronnie Reagan".
 		-- USER guest 8 * :Ronnie Reagan   ; User registering themselves with a username of "guest" and real name "Ronnie Reagan", and asking to be set invisible.
 		cli.user_want_invisible = true
+	elseif arg2 == "0" then
+		cli.user_want_invisible = false
 	end
 	cli.user = p[1]
 	cli.realname = realname
 	cli.state=STATES.USER
---	if cli.capls==false then -- non CAP client
-	return register(cli)
---	end
+	if not cli.cap_used then -- CAP client
+		--return register(cli)
+		return cli.NEXT_PROTOCOL
+	end
 end
 
 function protocol1.PING(cli,data)

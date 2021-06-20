@@ -21,6 +21,8 @@ function protocol2.init(cli)
 	cli.state=nil
 	cli.states=nil
 	cli.protocol=protocol2
+	cli.protocolnum=2 -- useless ?
+	cli.protocolnext=nil -- no change
         server_welcome(cli)
 	return cli
 end

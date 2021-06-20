@@ -45,9 +45,11 @@ local function send(self, prefix, cmd, target, params)
 end
 
 local const_EXIT={}
+local const_NEXT_PROTOCOL={}
 
 local client={
 	EXIT=const_EXIT,
+	NEXT_PROTOCOL=const_NEXT_PROTOCOL,
 	send=send,
 --	state=STATES.new,	-- current state for protocol1
 --	states=STATES,		-- all states of protocol1
@@ -56,6 +58,7 @@ local client={
 	host="hidden.irc-client.example.net",
 }
 protocols[1].init(client)
+assert(client.state==1)
 
 function client:sendNOTICE (target, msg) self:send(nil,  "NOTICE", target, msg) end
 function client:sendPRIVMSG(target, msg) self:send(nil, "PRIVMSG", target, msg) end
@@ -76,11 +79,13 @@ local function processline(cli, data)
 		prefix,data = painsplit1(data:sub(2), " ")
 	end
 	local cmd; cmd,data = plainsplit1(data, " ")
-	local parsed = {prefix=prefix, cmd=cmd}
-
 	local proto = cli.protocol
 	local f = proto[cmd] or proto.unknown
 	if f then
+		local parsed = {
+			prefix=assert(prefix),
+			cmd=assert(cmd),
+		}
 		return f(cli, data, parsed)
 	end
 end
@@ -100,6 +105,7 @@ log.server("# workaround line zero")
 	end
 	return line
 end
+
 local function main(client)
 	local fdin = io.stdin
 	while true do
@@ -108,7 +114,14 @@ local function main(client)
 		if not line then break end
 		log.client(line)
 		local r = processline(client,line)
-		if r == const_EXIT then break end
+		if r == client.EXIT then break end
+		if r == client.NEXT_PROTOCOL then
+print("NEXT_PROTOCOL")
+			client.protocol.finished(client)
+			client.protocol=client.protocols[client.protocolnext]
+			client.protocolnext=nil
+			client.protocol.init(client)
+		end
 	end
 end
 main(client)
