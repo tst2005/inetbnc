@@ -116,7 +116,6 @@ local function main(client)
 		local r = processline(client,line)
 		if r == client.EXIT then break end
 		if r == client.NEXT_PROTOCOL then
-print("NEXT_PROTOCOL")
 			client.protocol.finished(client)
 			client.protocol=client.protocols[client.protocolnext]
 			client.protocolnext=nil
