@@ -8,8 +8,8 @@ package.path=PWD.."/?.lua;"..PWD.."/?/init.lua;"..package.path
 
 local function log_open()
 	local logcount = 0
-	local clientlog = io.open(PWD.."/log/irc."..CLIENTIP..".c.log","w")
-	local serverlog = io.open(PWD.."/log/irc."..CLIENTIP..".s.log","w")
+	local clientlog = io.open(PWD.."/log/"..CLIENTIP..".c.log","w")
+	local serverlog = io.open(PWD.."/log/"..CLIENTIP..".s.log","w")
 	clientlog:setvbuf("line")
 	serverlog:setvbuf("line")
 
@@ -256,25 +256,31 @@ local function processline(cli, data)
 		log.server("# unknow command '"..cmd.."' for prefix='"..prefix.."' data='"..(data or "").."'")
 	end
 end
+
+local function input_readline(fdin)
+	local line=nil
+	while line==nil do
+		line = fdin:read("*l")
+		if not line then return false end
+		if line:sub(-1,-1)=="\r" then
+			line=line:sub(1,-2)
+		end
+		if line=="\0" then
+log.server("# workaround line zero")
+			line=nil
+		end
+	end
+	return line
+end
 local function main(client)
 	local fdin = io.stdin
 	while true do
 		io.stdout:flush()
-		local line = fdin:read("*l")
+		local line = input_readline(fdin)
 		if not line then break end
-		if line:sub(-1,-1)=="\r" then
-			line=line:sub(1,-2)
-		end
-		if line:match("^%z*$") then
-			-- continue
-		elseif line=="\0" then
-			-- continue
-		else
-			
-			log.client(line)
-			local r = processline(client,line)
-			if r == const_EXIT then break end
-		end
+		log.client(line)
+		local r = processline(client,line)
+		if r == const_EXIT then break end
 	end
 end
 main(client)
