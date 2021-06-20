@@ -3,9 +3,12 @@ local split = require "mini.string.split"
 local plainsplit1 = require "plainsplit1"
 
 --[[
+# (PRE_USER)
 Client: CAP LS 302
+Client: PASS 1234
 Client: NICK dan
 Client: USER d * 0 :This is a really good name
+# (POST_USER)
 Server: CAP * LS :multi-prefix sasl
 Client: CAP REQ :multi-prefix
 Server: CAP * ACK multi-prefix
@@ -17,12 +20,7 @@ Server: 001 dan :Welcome to the Internet Relay Network dan
 local protocol_cap = {pre_user={},post_user={}}
 function protocol_cap.pre_user.LS(cli, data, parsed)
 	local states=cli.states
-	if cli.state==states.new then
-		cli.cap_used=z -- "" or "302" or "307" ...
-		--cli.state=states.CAP_PRE_USER
-	else
-		-- for now: allow CAP LS only at the beginning (before or after PASS ?!)
-	end
+	cli.cap_used=z -- "" or "302" or "307" ...
 end
 protocol_cap.pre_user.LIST = protocol_cap.pre_user.LS
 function protocol_cap.pre_user.REQ(cli, data, parsed)
