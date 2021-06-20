@@ -1,6 +1,3 @@
-#!/usr/bin/env luajit
-
-local STATES = require "STATES"
 
 local split = require "mini.string.split"
 local plainsplit1 = require "plainsplit1"
@@ -19,9 +16,10 @@ Server: 001 dan :Welcome to the Internet Relay Network dan
 
 local protocol_cap = {}
 function protocol_cap.LS(cli, z)
-	if cli.state==STATES.new then
+	local states=cli.states
+	if cli.state==states.new then
 		cli.capls=z -- "" or "302" or "307" ...
-		cli.state=STATES.CAP_LS
+		cli.state=states.CAP_LS
 	else
 		-- for now: allow CAP LS only at the beginning
 	end
@@ -30,17 +28,4 @@ protocol_cap.LIST = protocol_cap.LS
 protocol_cap.REQ  = function() end
 protocol_cap.END  = function() end
 
---[[
-local protocol1 = {}
-function protocol1.CAP(cli,data)
-	local cmd2,z = plainsplit1(data, " ")
-	local f = protocol_cap[cmd2]
-	if not f then
-		-- protocol error or unsupported
-		-- just drop it
-	else
-		f(cli, z or "")
-	end
-end
-]]--
 return protocol_cap
